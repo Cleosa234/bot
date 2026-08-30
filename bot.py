@@ -1,31 +1,25 @@
 import os
 import telebot
+from telebot.types import Update
+from flask import Flask, request
 from groq import Groq
-from dotenv import load_dotenv
-from flask import Flask
-from threading import Thread
 
-# 1. Memuat variabel lingkungan
-load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# 2. Inisialisasi bot dan client AI
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 client = Groq(api_key=GROQ_API_KEY)
+app = Flask(__name__)
 
-# 3. System Prompt (menggunakan raw string 'r' agar karakter matematika aman)
 SYSTEM_PROMPT = r"""Anda adalah asisten belajar virtual yang ramah dan fokus. 
-Tugas Anda HANYA membantu pengguna memahami materi pelajaran, merangkum konsep, dan menjawab pertanyaan edukasi. 
-Jika pengguna membahas topik di luar pembelajaran, Anda WAJIB menolak dengan sopan.
+Tugas Anda HANYA membantu pengguna memahami materi pelajaran. Jika pengguna membahas topik di luar pembelajaran, Anda WAJIB menolak dengan sopan.
 
-ATURAN PENTING DALAM MENULIS JAWABAN:
-1. JANGAN PERNAH menggunakan format pemformatan matematika LaTeX seperti \( \), \[ \], \begin{cases}, atau \frac. 
-2. Gunakan teks normal (plain text) dan karakter keyboard standar untuk semua rumus dan angka. 
-3. Tulis pembagian dengan garis miring (contoh: 25.000 / 5 = 5.000).
-4. Gunakan spasi dan baris baru yang rapi agar hitungan mudah dibaca di layar HP."""
+ATURAN PENTING:
+1. JANGAN PERNAH menggunakan format matematika LaTeX seperti \( \), \[ \], \begin{cases}, atau \frac. 
+2. Gunakan teks normal dan karakter keyboard standar. 
+3. Tulis pembagian dengan garis miring.
+4. Gunakan spasi yang rapi."""
 
-# 4. Logika Bot Telegram
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     bot.reply_to(message, "Halo! Asisten belajar siap membantu.")
@@ -34,7 +28,6 @@ def send_welcome(message):
 def handle_message(message):
     try:
         bot.send_chat_action(message.chat.id, 'typing')
-        
         chat_completion = client.chat.completions.create(
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -44,33 +37,24 @@ def handle_message(message):
             temperature=0.5,
             max_tokens=1024
         )
-        
-        ai_response = chat_completion.choices[0].message.content
-        bot.reply_to(message, ai_response, parse_mode="Markdown")
-        
+        bot.reply_to(message, chat_completion.choices[0].message.content, parse_mode="Markdown")
     except Exception as e:
         bot.reply_to(message, "Koneksi API bermasalah. Coba lagi nanti.")
-        print(f"Error API: {e}")
 
-# ==========================================
-# 5. SERVER WEB FLASK UNTUK HOSTING RENDER
-# ==========================================
-app = Flask(__name__)
+# 1. Jalur rahasia agar Telegram bisa mengirim pesan ke Vercel
+@app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
+def receive_update():
+    json_string = request.get_data().decode('utf-8')
+    update = Update.de_json(json_string)
+    bot.process_new_updates([update])
+    return 'OK', 200
 
+# 2. Halaman utama web untuk pemicu otomatis
 @app.route('/')
-def home():
-    return "Bot Telegram Edukasi sedang berjalan online!"
-
-def run_server():
-    # Render secara otomatis akan memberikan port melalui environment variable
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
-
-if __name__ == "__main__":
-    # Menjalankan server Flask di latar belakang (background thread)
-    server_thread = Thread(target=run_server)
-    server_thread.start()
+def index():
+    host_url = request.url_root.replace("http://", "https://")
+    webhook_url = f"{host_url}api/index/{TELEGRAM_TOKEN}"
     
-    # Menjalankan bot Telegram
-    print("Bot Telegram dan Server Web berjalan bersamaan...")
-    bot.polling()
+    bot.remove_webhook()
+    bot.set_webhook(url=webhook_url)
+    return f"Sistem Bot Vercel Aktif! Webhook terhubung ke: {webhook_url}", 200
